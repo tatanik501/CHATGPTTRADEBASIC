@@ -1,0 +1,84 @@
+import yfinance as yf
+import pandas as pd
+import numpy as np
+import matplotlib.pyplot as plt
+
+class StockBacktester:
+    def __init__(self, ticker, start_date, end_date, initial_capital=100000):
+        self.ticker = ticker
+        self.start_date = start_date
+        self.end_date = end_date
+        self.initial_capital = initial_capital
+        self.stock_data = None
+        self.portfolio_value = []
+        self.returns = []
+
+    def download_data(self):
+        self.stock_data = yf.download(tickers=self.ticker, start=self.start_date, end=self.end_date, interval='1h')
+        self.stock_data['typical_price'] = (self.stock_data['High'] + self.stock_data['Low'] + self.stock_data['Close']) / 3
+        self.stock_data['typical_price_volume'] = self.stock_data['typical_price'] * self.stock_data['Volume']
+        self.stock_data['cumm_price_volume'] = self.stock_data['typical_price_volume'].rolling(20).sum()
+        self.stock_data['cumm_volume'] = self.stock_data['Volume'].rolling(20).sum()
+        self.stock_data['vwap'] = self.stock_data['cumm_price_volume'] / self.stock_data['cumm_volume']
+        self.stock_data['close_lag_1'] = self.stock_data['Close'].shift()
+        self.stock_data['vwap_lag_1'] = self.stock_data['vwap'].shift()
+        self.stock_data['signal_1'] = self.stock_data.apply(lambda x: 1 if (x['close_lag_1'] < x['vwap_lag_1']) and (x['Close'] > x['vwap'])
+                                                           else (-1 if (x['close_lag_1'] > x['vwap_lag_1']) and (x['Close'] < x['vwap'])
+                                                                 else 0), axis=1)
+
+    def backtest(self):
+        shares = 0
+        for i in range(len(self.stock_data)):
+            if self.stock_data['signal_1'].iloc[i] == 1:  # Buy signal
+                shares_to_buy = self.initial_capital / self.stock_data['Close'].iloc[i]
+                shares += shares_to_buy
+                self.initial_capital = 0
+                action = 'Buy'
+            elif self.stock_data['signal_1'].iloc[i] == -1:  # Sell signal
+                self.initial_capital += shares * self.stock_data['Close'].iloc[i]
+                shares = 0
+                action = 'Sell'
+            else:
+                action = 'Hold'
+
+            current_portfolio_value = self.initial_capital + shares * self.stock_data['Close'].iloc[i]
+            if i > 0:
+                prev_portfolio_value = self.portfolio_value[i-1]
+                self.returns.append((current_portfolio_value - prev_portfolio_value) / prev_portfolio_value)
+
+            self.portfolio_value.append(current_portfolio_value)
+
+            print(f"Date: {self.stock_data.index[i]} | Signal: {self.stock_data['signal_1'].iloc[i]} | Action: {action} | Portfolio Value: {current_portfolio_value}")
+
+        self.stock_data['portfolio_value'] = self.portfolio_value
+        self.stock_data['returns'] = [np.nan] + self.returns
+        self.stock_data['stock_price'] = self.stock_data['Close']
+        self.stock_data['hourly_returns'] = self.stock_data['Close'].pct_change().fillna(0)
+
+    def plot_signals(self):
+        fig, ax = plt.subplots(figsize=(12, 6))
+
+        ax.scatter(self.stock_data.index, self.stock_data['signal_1'], c=self.stock_data['signal_1'], cmap='coolwarm', label='Signal', marker='o')
+
+        ax.axhline(0, color='gray', linestyle='--')
+        ax.legend()
+        ax.set_title('Signals')
+        ax.set_xlabel('Date')
+        ax.set_ylabel('Signal')
+        plt.show()
+
+    def save_to_excel(self, filename):
+        self.stock_data.index = self.stock_data.index.tz_convert(None)
+        self.stock_data.to_excel(filename, index=False)
+        print(f"Data has been written to {filename} successfully.")
+
+ticker = input("Enter the ticker symbol: ")
+start_date = input("Enter the start date (YYYY-MM-DD): ")
+end_date = input("Enter the end date (YYYY-MM-DD): ")
+
+backtester = StockBacktester(ticker, start_date, end_date)
+backtester.download_data()
+backtester.backtest()
+excel_file = 'VWAP.xlsx'
+backtester.save_to_excel(excel_file)
+backtester.plot_signals()
