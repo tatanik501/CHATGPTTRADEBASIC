@@ -1,0 +1,289 @@
+#First We get the data here and write the close stock prices and their returns.
+
+import pandas as pd
+import yfinance as yf
+import numpy as np
+import cvxpy as cp
+import matplotlib.pyplot as plt
+from matplotlib.backends.backend_pdf import PdfPages
+from datetime import datetime
+
+tickers = [
+    "AKBNK.IS", "AKSEN.IS", "ALARK.IS", "ARCLK.IS", "ASELS.IS", "BIMAS.IS", "EKGYO.IS", "ENKAI.IS", "EREGL.IS",
+    "FROTO.IS", "GARAN.IS", "GUBRF.IS", "HEKTS.IS", "ISCTR.IS", "KCHOL.IS", "KOZAA.IS", "KOZAL.IS", "KRDMD.IS",
+    "ODAS.IS", "PETKM.IS", "PGSUS.IS", "SAHOL.IS", "SASA.IS", "SISE.IS", "TAVHL.IS", "TCELL.IS", "THYAO.IS",
+    "TOASO.IS", "TUPRS.IS", "YKBNK.IS"
+]
+
+start_date = "2023-01-01"
+end_date = "2023-06-30"
+
+data = yf.download(tickers, start=start_date, end=end_date)["Close"]
+
+df = pd.DataFrame(data)
+df = df.reset_index()
+
+
+df = df.melt(id_vars="Date", value_name="Close", var_name="Ticker")
+df["Daily_Return"] = df.groupby("Ticker")["Close"].pct_change()
+
+
+df = df.pivot(index="Date", columns="Ticker", values=["Close", "Daily_Return"])
+df.columns = df.columns.map("_".join)  
+df.reset_index(inplace=True)
+
+
+df["Date"] = pd.to_datetime(df["Date"]).dt.strftime("%d.%m.%Y")
+
+
+excel_writer = pd.ExcelWriter("stock_data.xlsx", engine="xlsxwriter")
+df.to_excel(excel_writer, index=False, sheet_name="Sheet1")
+
+
+workbook = excel_writer.book
+worksheet = excel_writer.sheets["Sheet1"]
+date_format = workbook.add_format({"num_format": "dd.mm.yyyy"})
+worksheet.set_column("A:A", None, date_format)
+
+
+column_widths = [12] * len(df.columns)
+for i, width in enumerate(column_widths):
+    worksheet.set_column(i+1, i+1, width=width)
+
+excel_writer.save()
+
+print("Data saved to stock_data.xlsx")
+
+----------------------------------------------------------------------------------------------------------------------------------------------------------------
+# Here we check whether the returns have normal distribution or not. The code will create a plot in pdf.
+
+
+import matplotlib.backends.backend_pdf
+import matplotlib.pyplot as plt
+from scipy import stats
+
+class ReturnsAnalyzer:
+    def __init__(self, tickers, start_date, end_date):
+        self.tickers = tickers
+        self.start_date = start_date
+        self.end_date = end_date
+        self.data = None
+        self.returns = None
+        self.num_plots = len(tickers)
+        self.fig, self.axes = plt.subplots(self.num_plots, 1, figsize=(8, 4 * self.num_plots))
+        self.pdf_filename = "histogram_plots.pdf"
+    
+    def fetch_data(self):
+        data = yf.download(self.tickers, start=self.start_date, end=self.end_date)["Close"]
+        self.data = data
+    
+    def calculate_returns(self):
+        self.returns = self.data.pct_change().dropna()
+    
+    def plot_histograms(self):
+        num_plots_per_page = 6
+        num_pages = -(-self.num_plots // num_plots_per_page)  
+
+        plt.ioff()  
+
+        with matplotlib.backends.backend_pdf.PdfPages(self.pdf_filename) as pdf:
+            for page in range(num_pages):
+                start_plot = page * num_plots_per_page
+                end_plot = min((page + 1) * num_plots_per_page, self.num_plots)
+
+                self.fig, self.axes = plt.subplots(end_plot - start_plot, 1, figsize=(8, 4 * (end_plot - start_plot)))
+
+                for i, ticker in enumerate(self.tickers[start_plot:end_plot]):
+                    ax = self.axes[i]
+                    returns = self.returns[ticker]
+                    ax.hist(returns, bins=40, color='skyblue', edgecolor='black')
+                    ax.set_title(ticker + " - Daily Returns")
+                    ax.set_xlabel("Return")
+                    ax.set_ylabel("Frequency")
+
+                    _, p_value = stats.shapiro(returns)
+                    is_normal = p_value > 0.01  
+
+
+                    ax.text(
+                        0.95,
+                        0.95,
+                        f"Normal: {is_normal}\np-value: {p_value:.4f}",
+                        ha='right',
+                        va='top',
+                        transform=ax.transAxes,
+                        bbox=dict(facecolor='white', edgecolor='black', boxstyle='round'))
+
+                self.fig.tight_layout()
+                pdf.savefig(self.fig)
+                plt.close(self.fig)
+
+        plt.ion()  
+
+
+        
+    def run_analysis(self):
+        self.fetch_data()
+        self.calculate_returns()
+        self.plot_histograms()
+
+tickers = [
+    "AKBNK.IS", "AKSEN.IS", "ALARK.IS", "ARCLK.IS", "ASELS.IS", "BIMAS.IS", "EKGYO.IS", "ENKAI.IS", "EREGL.IS",
+    "FROTO.IS", "GARAN.IS", "GUBRF.IS", "HEKTS.IS", "ISCTR.IS", "KCHOL.IS", "KOZAA.IS", "KOZAL.IS", "KRDMD.IS",
+    "ODAS.IS", "PETKM.IS", "PGSUS.IS", "SAHOL.IS", "SISE.IS", "TAVHL.IS", "TCELL.IS", "THYAO.IS",
+    "TOASO.IS", "TUPRS.IS", "YKBNK.IS"
+]
+
+start_date = "2022-01-01"
+end_date = "2023-01-01"
+
+analyzer = ReturnsAnalyzer(tickers, start_date, end_date)
+analyzer.run_analysis()
+
+----------------------------------------------------------------------------------------------------------------------------------------------------------
+#Here we have basic Mean-Variance optimization procedure. Results will be written excel.
+
+import pandas as pd
+import yfinance as yf
+import numpy as np
+import cvxpy as cp
+import matplotlib.pyplot as plt
+
+class PortfolioOptimizer:
+    def __init__(self, tickers, start_date, end_date):
+        self.tickers = tickers
+        self.start_date = start_date
+        self.end_date = end_date
+
+    def download_data(self):
+        data = yf.download(self.tickers, start=self.start_date, end=self.end_date)["Adj Close"]
+        returns = np.log(data / data.shift(1))
+        return data, returns
+
+    def calculate_expected_returns(self, returns):
+        mean_returns = returns.mean()
+        return mean_returns
+
+    def calculate_covariance_matrix(self, returns):
+        cov_matrix = returns.cov()
+        return cov_matrix
+
+    def solve_optimization(self, mean_returns, cov_matrix):
+        n_assets = len(self.tickers)
+        weights = cp.Variable(n_assets, nonneg=True)
+
+        portfolio_variance = cp.quad_form(weights, cov_matrix)
+
+        constraints = [
+            cp.sum(weights) == 1,
+            weights >= 0.00,
+            weights <= 0.12
+        ]
+
+        objective = cp.Minimize(portfolio_variance)
+        problem = cp.Problem(objective, constraints)
+        problem.solve()
+
+        optimal_weights = weights.value
+        return optimal_weights
+
+    def analyze_results(self, optimal_weights, mean_returns, cov_matrix):
+        portfolio_return = np.dot(optimal_weights, mean_returns)
+        portfolio_risk = np.sqrt(np.dot(optimal_weights.T, np.dot(cov_matrix, optimal_weights)))
+
+        weights_df = pd.DataFrame(optimal_weights, index=self.tickers, columns=['Weights'])
+        portfolio_metrics = {
+            'Portfolio Return': portfolio_return,
+            'Portfolio Risk': portfolio_risk
+        }
+
+        return weights_df, portfolio_metrics
+
+    def optimize_portfolio(self):
+        data, returns = self.download_data()
+        mean_returns = self.calculate_expected_returns(returns)
+        cov_matrix = self.calculate_covariance_matrix(returns)
+        optimal_weights = self.solve_optimization(mean_returns, cov_matrix)
+        weights_df, portfolio_metrics = self.analyze_results(optimal_weights, mean_returns, cov_matrix)
+
+        return weights_df, portfolio_metrics, data, returns
+
+    def generate_report(self, initial_investment):
+        weights_df, portfolio_metrics, data, returns = self.optimize_portfolio()
+        portfolio_weights = weights_df['Weights'].values
+
+        nonzero_weights = portfolio_weights[portfolio_weights > 0]
+        nonzero_tickers = [self.tickers[i] for i in range(len(self.tickers)) if portfolio_weights[i] > 0]
+
+        if len(nonzero_tickers) == 0:
+            print("No tickers with nonzero weights.")
+            return None, None, None
+
+
+        weights_filename = 'portfolio_weights.xlsx'
+        weights_df.to_excel(weights_filename, sheet_name='Weights')
+
+
+        daily_weights = pd.DataFrame(index=returns.index, columns=self.tickers)
+        daily_returns = returns.copy()
+
+        for date in returns.index:
+            daily_weights.loc[date] = portfolio_weights
+
+        weighted_returns = daily_weights * daily_returns
+        portfolio_returns = weighted_returns.sum(axis=1)
+        portfolio_value = (portfolio_returns + 1).cumprod() * initial_investment
+
+ 
+        returns_filename = 'portfolio_returns.xlsx'
+        with pd.ExcelWriter(returns_filename) as writer:
+            data.to_excel(writer, sheet_name='Stock Prices')
+            daily_returns.to_excel(writer, sheet_name='Daily Returns')
+            weighted_returns.to_excel(writer, sheet_name='Weighted Returns')
+            portfolio_returns.to_excel(writer, sheet_name='Portfolio Returns')
+            portfolio_value.to_excel(writer, sheet_name='Portfolio Value')
+
+
+            plt.figure(figsize=(10, 6))
+            plt.plot(portfolio_value.index, portfolio_value.values)
+            plt.xlabel('Date')
+            plt.ylabel('Portfolio Value')
+            plt.title('Portfolio Value Over Time')
+            plt.grid(True)
+            plt.tight_layout()
+            plt.savefig('portfolio_value_plot.png')
+            plt.close()
+
+
+            workbook = writer.book
+            worksheet = writer.sheets['Portfolio Value']
+            worksheet.insert_image('D2', 'portfolio_value_plot.png')
+
+        return weights_filename, returns_filename, portfolio_metrics
+
+
+tickers = [
+    "AKBNK.IS", "AKSEN.IS", "ALARK.IS", "ARCLK.IS", "ASELS.IS", "BIMAS.IS", "EKGYO.IS", "ENKAI.IS", "EREGL.IS",
+    "FROTO.IS", "GARAN.IS", "GUBRF.IS", "HEKTS.IS", "ISCTR.IS", "KCHOL.IS", "KOZAA.IS", "KOZAL.IS", "KRDMD.IS",
+    "ODAS.IS", "PETKM.IS", "PGSUS.IS", "SAHOL.IS", "SISE.IS", "TAVHL.IS", "TCELL.IS", "THYAO.IS",
+    "TOASO.IS", "TUPRS.IS", "YKBNK.IS"
+]
+start_date = '2023-05-26'
+end_date = '2023-06-23'
+initial_investment = 500000
+
+optimizer = PortfolioOptimizer(tickers, start_date, end_date)
+weights_filename, returns_filename, portfolio_metrics = optimizer.generate_report(initial_investment)
+
+if weights_filename and returns_filename:
+    print("Optimal Weights:")
+    weights_df = pd.read_excel(weights_filename, sheet_name='Weights', index_col=0)
+    print(weights_df)
+
+    print("\nPortfolio Metrics:")
+    for metric, value in portfolio_metrics.items():
+        print(f"{metric}: {value}")
+
+    print(f"\nWeights saved as {weights_filename}")
+    print(f"Returns saved as {returns_filename}")
+
