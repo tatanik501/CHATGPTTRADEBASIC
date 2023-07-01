@@ -1,0 +1,138 @@
+THIS CODE WILL CALCULATE BASIC STATISTICS REGARDING THE CLOSE PRICE OF SOME SELECTED STOCKS (XU030 - BIST30)
+
+import pandas as pd
+import yfinance as yf
+import numpy as np
+import matplotlib.pyplot as plt
+from matplotlib.backends.backend_pdf import PdfPages
+
+class StockStatistics:
+    def __init__(self, tickers, start_date, end_date):
+        self.tickers = tickers
+        self.start_date = start_date
+        self.end_date = end_date
+        self.data = self._download_data()
+        self.statistics = self.calculate_statistics()
+
+    def _download_data(self):
+        data = yf.download(self.tickers, start=self.start_date, end=self.end_date)["Close"]
+        return pd.DataFrame(data)
+
+    def calculate_statistics(self):
+        statistics = []
+
+        for ticker in self.tickers:
+            data = self.data[ticker]
+            stats = {
+                "Ticker": ticker,
+                "Mean": data.mean(),
+                "Median": data.median(),
+                "Maximum": data.max(),
+                "Minimum": data.min(),
+                "Variance": data.var(),
+                "Standard Deviation": data.std(),
+                "Skewness": data.skew(),
+                "Kurtosis": data.kurtosis(),
+                "25% Quantile": data.quantile(0.25),
+                "50% Quantile": data.quantile(0.50),
+                "75% Quantile": data.quantile(0.75),
+                "Coefficient of Variation (C.V.)": data.std() / data.mean()
+            }
+            statistics.append(stats)
+
+        return pd.DataFrame(statistics)
+
+    def print_to_pdf(self, stocks_per_page=6):
+        num_pages = int(np.ceil(len(self.tickers) / stocks_per_page))
+
+        with PdfPages("stock_statistics.pdf") as pdf:
+            for page in range(num_pages):
+                start_index = page * stocks_per_page
+                end_index = (page + 1) * stocks_per_page
+                tickers_subset = self.tickers[start_index:end_index]
+                stats_subset = self.statistics[self.statistics["Ticker"].isin(tickers_subset)]
+
+
+                stats_subset_pivot = stats_subset.set_index("Ticker").T
+
+                fig, ax = plt.subplots(figsize=(8, 6))
+                ax.axis('off')
+
+                table = ax.table(cellText=np.round(stats_subset_pivot.values, 2),
+                                 rowLabels=stats_subset_pivot.index,
+                                 colLabels=stats_subset_pivot.columns,
+                                 cellLoc='center',
+                                 loc='center')
+
+                table.auto_set_font_size(False)
+                table.set_fontsize(10)
+                table.scale(1, 1.5)
+
+
+                table.auto_set_column_width(col=list(range(len(tickers_subset) + 1)))
+
+                pdf.savefig()
+                plt.close(fig)
+
+
+tickers = ["AKBNK.IS", "AKSEN.IS", "ALARK.IS", "ARCLK.IS", "ASELS.IS", "BIMAS.IS", "EKGYO.IS", "ENKAI.IS", "EREGL.IS",
+           "FROTO.IS", "GARAN.IS", "GUBRF.IS", "HEKTS.IS", "ISCTR.IS", "KCHOL.IS", "KOZAA.IS", "KOZAL.IS", "KRDMD.IS",
+           "ODAS.IS", "PETKM.IS", "PGSUS.IS", "SAHOL.IS", "SASA.IS", "SISE.IS", "TAVHL.IS", "TCELL.IS", "THYAO.IS",
+           "TOASO.IS", "TUPRS.IS", "YKBNK.IS"]
+start_date = "2023-01-01"
+end_date = "2023-06-30"
+
+stock_stats = StockStatistics(tickers, start_date, end_date)
+stock_stats.print_to_pdf(stocks_per_page=4)
+
+
+
+
+
+
+
+THIS CODE WILL CHECK THE NORMALITY OF CLOSED PRICES AND CREATE AN EXCEL FILE. 
+-----------------------------------------------------------------------------------------------------------------------------------------------------------------
+
+
+import pandas as pd
+import yfinance as yf
+import numpy as np
+from scipy import stats
+
+tickers = ["AKBNK.IS", "AKSEN.IS", "ALARK.IS", "ARCLK.IS", "ASELS.IS", "BIMAS.IS", "EKGYO.IS", "ENKAI.IS", "EREGL.IS",
+           "FROTO.IS", "GARAN.IS", "GUBRF.IS", "HEKTS.IS", "ISCTR.IS", "KCHOL.IS", "KOZAA.IS", "KOZAL.IS", "KRDMD.IS",
+           "ODAS.IS", "PETKM.IS", "PGSUS.IS", "SAHOL.IS", "SASA.IS", "SISE.IS", "TAVHL.IS", "TCELL.IS", "THYAO.IS",
+           "TOASO.IS", "TUPRS.IS", "YKBNK.IS"]
+start_date = "2023-01-01"
+end_date = "2023-06-30"
+
+data = yf.download(tickers, start=start_date, end=end_date)["Close"]
+
+statistics = []
+
+for ticker in tickers:
+    returns = data[ticker].pct_change().dropna()
+    skewness = returns.skew()
+    kurtosis = returns.kurtosis()
+    JB = (len(returns) / 6) * (skewness ** 2 + ((kurtosis - 3) ** 2) / 4)
+    p_value = 1 - stats.chi2.cdf(JB, df=2)
+
+    if p_value > 0.01:
+        result = '✔️'
+    else:
+        result = '❌'
+
+    stats_info = {
+        "Ticker": ticker,
+        "Skewness": skewness,
+        "Kurtosis": kurtosis,
+        "Jarque-Bera": JB,
+        "p-value": p_value,
+        "Result": result
+    }
+    statistics.append(stats_info)
+
+df = pd.DataFrame(statistics)
+
+df.to_excel("JBResult.xlsx", index=False)
