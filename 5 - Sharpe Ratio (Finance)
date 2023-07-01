@@ -1,0 +1,91 @@
+WE NEED THE YIELD OF GOVERNMENT BOND FOR THE RELATED COUNTRY. I GOT FROM INVESTING "https://www.investing.com/"
+------------------------------------------------------------------------------------------------------------------------------------------------------------------
+
+import pandas as pd
+import yfinance as yf
+import matplotlib.pyplot as plt
+
+class SharpeRatioCalculator:
+    def __init__(self, tickers, bond_data_file):
+        self.tickers = tickers
+        self.bond_data_file = bond_data_file
+        self.stock_data = None
+        self.bond_data = None
+        self.daily_returns = {}
+        self.average_returns = {}
+        self.sharpe_ratios = {}
+
+    def load_stock_data(self, start_date, end_date):
+
+        data = yf.download(self.tickers, start=start_date, end=end_date)['Adj Close']
+        self.stock_data = data
+        self.calculate_average_returns()
+
+    def load_bond_data(self):
+
+        self.bond_data = pd.read_excel(self.bond_data_file, index_col=0, parse_dates=True)
+
+    def calculate_average_returns(self):
+        for ticker in self.tickers:
+            self.daily_returns[ticker] = self.stock_data[ticker].pct_change().dropna()
+            self.average_returns[ticker] = self.daily_returns[ticker].mean()
+
+    def calculate_sharpe_ratios(self):
+        for ticker in self.tickers:
+            stock_std = self.daily_returns[ticker].std()
+            bond_return = self.bond_data['Price'] / 100 / 252  # for bond's daily return
+            bond_return_aligned = bond_return.reindex(self.daily_returns[ticker].index, method='nearest')
+            sharpe_ratio = (self.average_returns[ticker] - bond_return_aligned.mean()) / stock_std
+            self.sharpe_ratios[ticker] = sharpe_ratio
+
+    def write_results_to_excel(self, output_file):
+        results_list = []
+        for ticker in self.tickers:
+            results_list.append({
+                "Ticker": ticker,
+                "Average Return": self.average_returns[ticker],
+                "Sharpe Ratio": self.sharpe_ratios[ticker]
+            })
+
+        results_df = pd.concat([pd.DataFrame([result]) for result in results_list], ignore_index=True)
+        stock_prices_df = pd.DataFrame(self.stock_data)
+        bond_yield_df = pd.DataFrame(self.bond_data)
+
+        with pd.ExcelWriter(output_file) as writer:
+            results_df.to_excel(writer, sheet_name='Sharpe Ratios', index=False)
+            stock_prices_df.to_excel(writer, sheet_name='Stock Prices', index=True)
+            bond_yield_df.to_excel(writer, sheet_name='Bond Yield', index=True)
+
+
+    def plot_sharpe_ratios(self, output_file):
+
+        plt.figure(figsize=(10, 6))
+        plt.scatter(self.tickers, self.sharpe_ratios.values(), marker='o', color='b')
+        plt.xlabel('Tickers')
+        plt.ylabel('Sharpe Ratio')
+        plt.title('Sharpe Ratios for Tickers')
+        plt.xticks(rotation=90)
+        plt.grid(True)
+
+
+        plt.savefig(output_file, bbox_inches='tight')
+
+
+calculator = SharpeRatioCalculator(
+    tickers=["AKBNK.IS", "AKSEN.IS", "ALARK.IS", "ARCLK.IS", "ASELS.IS", "BIMAS.IS", "EKGYO.IS", "ENKAI.IS", "EREGL.IS",
+             "FROTO.IS", "GARAN.IS", "GUBRF.IS", "HEKTS.IS", "ISCTR.IS", "KCHOL.IS", "KOZAA.IS", "KOZAL.IS", "KRDMD.IS",
+             "ODAS.IS", "PETKM.IS", "PGSUS.IS", "SAHOL.IS", "SASA.IS", "SISE.IS", "TAVHL.IS", "TCELL.IS", "THYAO.IS",
+             "TOASO.IS", "TUPRS.IS", "YKBNK.IS"],
+    bond_data_file="Turkey 10-Year Bond Yield Historical Data.xlsx"
+)
+
+
+calculator.load_stock_data(start_date="2022-01-03", end_date="2023-06-27")
+calculator.load_bond_data()
+
+
+calculator.calculate_sharpe_ratios()
+
+calculator.write_results_to_excel("Sharpe Ratios.xlsx")
+
+calculator.plot_sharpe_ratios("Sharpe Ratios.png")
